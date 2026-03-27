@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>POPA診断</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      background: #f7f7f7;
+      color: #222;
+      margin: 0;
+      padding: 0;
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 16px 48px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 28px;
+      margin: 0 0 8px;
+    }
+    h2 {
+      font-size: 22px;
+      margin: 0 0 16px;
+    }
+    h3 {
+      font-size: 18px;
+      margin: 0 0 12px;
+    }
+    p {
+      line-height: 1.7;
+      margin: 8px 0;
+    }
+    .muted {
+      color: #666;
+      font-size: 14px;
+    }
+    .question {
+      margin-bottom: 24px;
+    }
+    .choices {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    label.choice {
+      display: block;
+      padding: 12px 14px;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: 0.2s;
+      background: #fff;
+    }
+    label.choice:hover {
+      border-color: #999;
+      background: #fafafa;
+    }
+    input[type="radio"] {
+      margin-right: 8px;
+    }
+    button, .btn {
+      display: inline-block;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 18px;
+      font-size: 16px;
+      cursor: pointer;
+      text-decoration: none;
+      background: #222;
+      color: #fff;
+      margin-top: 12px;
+    }
+    button:hover, .btn:hover {
+      opacity: 0.9;
+    }
+    .result-grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .result-item {
+      padding: 14px;
+      border: 1px solid #eee;
+      border-radius: 12px;
+      background: #fafafa;
+    }
+    .footer-note {
+      font-size: 12px;
+      color: #888;
+      margin-top: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="app"></div>
+  </div>
+
+  <script>
+    const app = document.getElementById("app");
+
+    const params = new URLSearchParams(window.location.search);
+    const src = params.get("src") || "direct";
+    const lp = params.get("lp") || "https://example.com/";
+    const debug = params.get("debug") || "0";
+
+    let diagnosisData = null;
+
+    function logEvent(eventName, payload = {}) {
+      const log = {
+        timestamp: new Date().toISOString(),
+        event: eventName,
+        src,
+        ...payload
+      };
+
+      console.log("LOG", log);
+
+      const saved = JSON.parse(localStorage.getItem("popa_logs") || "[]");
+      saved.push(log);
+      localStorage.setItem("popa_logs", JSON.stringify(saved));
+
+      if (debug === "1") {
+        console.log("saved logs:", saved);
+      }
+    }
+
+    async function loadData() {
+      const res = await fetch("./diagnosis-data.json");
+      diagnosisData = await res.json();
+      renderIntro();
+      logEvent("page_view");
+    }
+
+    function renderIntro() {
+      const data = diagnosisData.app;
+      app.innerHTML = `
+        <div class="card">
+          <p class="muted">${data.diagnosis_name_jp} / ${data.diagnosis_name_en}</p>
+          <h1>${data.title}</h1>
+          <p><strong>${data.subtitle}</strong></p>
+          <p>${data.catch}</p>
+          <p>${data.description}</p>
+          <button id="startBtn">診断をはじめる</button>
+        </div>
+      `;
+      document.getElementById("startBtn").addEventListener("click", () => {
+        logEvent("start_click");
+        renderQuestions();
+      });
+    }
+
+    function renderQuestions() {
+      const questionsHtml = diagnosisData.questions.map((q) => {
+        const choicesHtml = q.choices.map((choice) => `
+          <label class="choice">
+            <input type="radio" name="${q.id}" value="${choice.type}" />
+            ${choice.label}
+          </label>
+        `).join("");
+
+        return `
+          <div class="question">
+            <h3>${q.id}. ${q.question}</h3>
+            <div class="choices">${choicesHtml}</div>
+          </div>
+        `;
+      }).join("");
+
+      app.innerHTML = `
+        <div class="card">
+          <h2>3問でわかるPOPA診断</h2>
+          <form id="quizForm">
+            ${questionsHtml}
+            <button type="submit">診断結果を見る</button>
+          </form>
+        </div>
+      `;
+
+      document.getElementById("quizForm").addEventListener("submit", handleSubmit);
+    }
+
+    function handleSubmit(e) {
+      e.preventDefault();
+
+      const answers = {};
+      for (const q of diagnosisData.questions) {
+        const checked = document.querySelector(`input[name="${q.id}"]:checked`);
+        if (!checked) {
+          alert("すべての質問に回答してください。");
+          return;
+        }
+        answers[q.id] = checked.value;
+      }
+
+      logEvent("quiz_submit", { answers });
+
+      const resultType = judgeResult(answers);
+      renderResult(resultType, answers);
+    }
+
+    function judgeResult(answers) {
+      const score = { P1: 0, P2: 0, P3: 0, P4: 0 };
+
+      Object.values(answers).forEach(type => {
+        if (score[type] !== undefined) score[type]++;
+      });
+
+      const max = Math.max(...Object.values(score));
+      const topTypes = Object.keys(score).filter(key => score[key] === max);
+
+      if (topTypes.length === 1) return topTypes[0];
+
+      return answers.Q1;
+    }
+
+    function renderResult(typeKey, answers) {
+      const result = diagnosisData.results[typeKey];
+
+      logEvent("result_view", {
+        result_type: typeKey,
+        result_name: result.character_name
+      });
+
+      app.innerHTML = `
+        <div class="card">
+          <p class="muted">診断結果</p>
+          <h2>${result.headline}</h2>
+          <p><strong>${result.type_name}</strong></p>
+
+          <div class="result-grid">
+            <div class="result-item">
+              <strong>特徴</strong>
+              <p>${result.feature}</p>
+            </div>
+            <div class="result-item">
+              <strong>強み</strong>
+              <p>${result.strength}</p>
+            </div>
+            <div class="result-item">
+              <strong>弱み</strong>
+              <p>${result.weakness}</p>
+            </div>
+            <div class="result-item">
+              <strong>意外性</strong>
+              <p>${result.surprise}</p>
+            </div>
+            <div class="result-item">
+              <strong>次の一手</strong>
+              <p>${result.next_action}</p>
+            </div>
+          </div>
+
+          <a id="lpBtn" class="btn" href="${lp}?src=${encodeURIComponent(src)}&type=${encodeURIComponent(typeKey)}" target="_blank" rel="noopener noreferrer">
+            詳しく見る
+          </a>
+
+          <p class="footer-note">※ 診断結果は行動傾向のヒントです。</p>
+        </div>
+      `;
+
+      document.getElementById("lpBtn").addEventListener("click", () => {
+        logEvent("lp_click", {
+          result_type: typeKey,
+          result_name: result.character_name,
+          answers
+        });
+      });
+    }
+
+    loadData().catch(err => {
+      console.error(err);
+      app.innerHTML = `
+        <div class="card">
+          <h2>読み込みエラー</h2>
+          <p>diagnosis-data.json の配置を確認してください。</p>
+        </div>
+      `;
+    });
+  </script>
+</body>
+</html>
